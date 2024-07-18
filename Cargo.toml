@@ -10,18 +10,10 @@ homepage = "https://github.com/ciantic/VirtualDesktopAccessor/tree/rust/"
 repository = "https://github.com/ciantic/VirtualDesktopAccessor/tree/rust/"
 
 [dependencies]
-windows = { version = "0.56", features = [
-    # Find WinApi features with searching here https://microsoft.github.io/windows-docs-rs/
-    "implement",
-    "Win32_System_Com",
-    "Win32_UI_Shell_Common",        # for IObjectArray
-    "Win32_UI_WindowsAndMessaging", # for TranslateMessage etc.
-    "Win32_Foundation",             # for FindWindowW
-    "Win32_System_Threading",       # For CreateThread
-] }
-windows-core = { version = "0.56" }
-windows-interface = { version = "0.56" }
-windows-implement = { version = "0.56" }
+windows = { version = "0.57", features = ["implement", "Win32_System_Com", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Threading"] }
+windows-core = "0.57"
+windows-interface = "0.57"
+windows-implement = "0.57"
 crossbeam-channel = { version = "0.5", optional = true }
 winit = { version = "0.30", optional = true }
 macro_rules_attribute = "0.2"
