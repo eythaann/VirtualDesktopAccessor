@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::comobjects::ComObjects;
-use crate::interfaces::{
+use crate::interfaces_multi::{
     ComIn, IApplicationView, IVirtualDesktop, IVirtualDesktopNotification,
     IVirtualDesktopNotification_Impl,
 };
@@ -11,19 +11,12 @@ use crate::log::log_output;
 use crate::DesktopEventSender;
 use crate::{DesktopEvent, Result};
 
+#[allow(unused_imports)]
 use windows::core::{Interface, HRESULT, HSTRING};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{
     GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
 };
-
-// Log format macro
-macro_rules! log_format {
-    ($($arg:tt)*) => {
-        #[cfg(debug_assertions)]
-        $crate::log::log_output(&format!($($arg)*));
-    };
-}
 
 enum DekstopEventThreadMsg {
     Quit,
@@ -141,7 +134,7 @@ impl<'a> VirtualDesktopNotificationWrapper<'a> {
         sender: Box<dyn Fn(DesktopEvent)>,
     ) -> Result<Pin<Box<VirtualDesktopNotificationWrapper>>> {
         let ptr: Pin<Box<IVirtualDesktopNotification>> =
-            Pin::new(Box::new(VirtualDesktopNotification { sender }.into()));
+            Box::pin(VirtualDesktopNotification { sender }.into());
         let raw_ptr = ptr.as_raw();
         let cookie = com_objects.register_for_notifications(raw_ptr)?;
         let notification = Pin::new(Box::new(VirtualDesktopNotificationWrapper {
@@ -173,7 +166,7 @@ impl<'a> Drop for VirtualDesktopNotificationWrapper<'a> {
     }
 }
 
-#[windows::core::implement(IVirtualDesktopNotification)]
+#[cfg_attr(not(feature = "multiple-windows-versions"), windows::core::implement(IVirtualDesktopNotification))]
 struct VirtualDesktopNotification {
     sender: Box<dyn Fn(DesktopEvent)>,
 }

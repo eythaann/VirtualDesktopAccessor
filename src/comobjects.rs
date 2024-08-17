@@ -1,5 +1,7 @@
-/// This module contains COM object for accessing the Windows Virtual Desktop API
-use super::interfaces::*;
+//! This module contains COM object for accessing the Windows Virtual Desktop API
+#![allow(clippy::upper_case_acronyms)]
+
+use super::interfaces_multi::*;
 use super::Result;
 use std::convert::TryFrom;
 use std::rc::Rc;
@@ -48,6 +50,15 @@ pub enum Error {
     /// Generic element not found
     ComElementNotFound,
 
+    /// A requested interface was not supported. Windows might have changed the
+    /// definitions of some unstable virtual desktop interfaces used by this
+    /// library.
+    ComNoInterface,
+
+    /// Not implemented. When supporting multiple Windows versions this is
+    /// returned for methods that don't exist in the current version.
+    ComNotImplemented,
+
     /// Some unhandled COM error
     ComError(HRESULT),
 
@@ -60,34 +71,44 @@ pub enum Error {
     InternalBorrowError,
 }
 
-trait HRESULTHelpers {
+pub(crate) trait HRESULTHelpers {
     fn as_error(&self) -> Error;
     fn as_result(&self) -> Result<()>;
 }
 
 impl HRESULTHelpers for ::windows::core::HRESULT {
     fn as_error(&self) -> Error {
-        if self.0 == -2147221164 {
-            // 0x80040154
-            return Error::ClassNotRegistered;
+        match self.0 {
+            -2147221164 => {
+                // 0x80040154
+                Error::ClassNotRegistered
+            }
+            -2147023174 => {
+                // 0x800706BA
+                Error::RpcServerNotAvailable
+            }
+            -2147220995 => {
+                // 0x800401FD
+                Error::ComObjectNotConnected
+            }
+            -2147319765 => {
+                // 0x8002802B
+                Error::ComElementNotFound
+            }
+            -2147221008 => {
+                // 0x800401F0
+                Error::ComNotInitialized
+            }
+            -2147467262 => {
+                // 0x80004002
+                Error::ComNoInterface
+            }
+            -2147467263 => {
+                // 0x80004001
+                Error::ComNotImplemented
+            }
+            _ => Error::ComError(*self),
         }
-        if self.0 == -2147023174 {
-            // 0x800706BA
-            return Error::RpcServerNotAvailable;
-        }
-        if self.0 == -2147220995 {
-            // 0x800401FD
-            return Error::ComObjectNotConnected;
-        }
-        if self.0 == -2147319765 {
-            // 0x8002802B
-            return Error::ComElementNotFound;
-        }
-        if self.0 == -2147221008 {
-            // 0x800401F0
-            return Error::ComNotInitialized;
-        }
-        Error::ComError(self.clone())
     }
 
     fn as_result(&self) -> Result<()> {
@@ -167,7 +188,7 @@ pub struct ComObjects {
     view_collection: RefCell<Option<Rc<IApplicationViewCollection>>>,
 }
 
-fn retry_function<F, R>(com_objects: &ComObjects, f: F) -> Result<R>
+fn retry_function<F, R>(com_objects: &ComObjects, f: F, _fn_name: &str) -> Result<R>
 where
     F: Fn() -> Result<R>,
 {
@@ -181,8 +202,7 @@ where
                     || er == &Error::ComAllocatedNullPtr
                     || er == &Error::ComNotInitialized =>
             {
-                #[cfg(debug_assertions)]
-                log_output(&format!("Retry the function after {:?}", er));
+                log_format!("Retry the function \"{_fn_name}\" after {:?}", er);
 
                 if er == &Error::ComNotInitialized {
                     let _ = unsafe { CoIncrementMTAUsage() };
@@ -204,7 +224,10 @@ where
 
     #[cfg(debug_assertions)]
     if let Err(er) = &value {
-        log_output(&format!("Com_objects function failed with {:?}", er));
+        log_format!(
+            "Com_objects function \"{_fn_name}\" failed with {:?}",
+            er
+        );
     }
 
     value
@@ -232,7 +255,7 @@ macro_rules! retry_function {(
     {
         retry_function(&$self_, || -> $RetTy {
             $body
-        })
+        }, stringify!($fname))
     }
 )}
 
@@ -262,7 +285,7 @@ impl ComObjects {
 
         provider
             .as_ref()
-            .map(|v| Rc::clone(&v))
+            .map(Rc::clone)
             .ok_or(Error::ComAllocatedNullPtr)
     }
 
@@ -288,7 +311,7 @@ impl ComObjects {
         }
         manager
             .as_ref()
-            .map(|v| Rc::clone(&v))
+            .map(Rc::clone)
             .ok_or(Error::ComAllocatedNullPtr)
     }
 
@@ -298,25 +321,14 @@ impl ComObjects {
             .try_borrow_mut()
             .map_err(|_| Error::InternalBorrowError)?;
         if manager_internal.is_none() {
-            let mut obj = std::ptr::null_mut::<c_void>();
             let provider = self.get_provider()?;
-            unsafe {
-                provider
-                    .query_service(
-                        &CLSID_VirtualDesktopManagerInternal,
-                        &IVirtualDesktopManagerInternal::IID,
-                        &mut obj,
-                    )
-                    .as_result()?;
-            }
-            assert_eq!(obj.is_null(), false);
             *manager_internal = Some(Rc::new(unsafe {
-                IVirtualDesktopManagerInternal::from_raw(obj)
+                IVirtualDesktopManagerInternal::query_service(&provider)?
             }));
         }
         manager_internal
             .as_ref()
-            .map(|v| Rc::clone(&v))
+            .map(Rc::clone)
             .ok_or(Error::ComAllocatedNullPtr)
     }
 
@@ -327,24 +339,13 @@ impl ComObjects {
             .map_err(|_| Error::InternalBorrowError)?;
         if notification_service.is_none() {
             let provider = self.get_provider()?;
-            let mut obj = std::ptr::null_mut::<c_void>();
-            unsafe {
-                provider
-                    .query_service(
-                        &CLSID_IVirtualNotificationService,
-                        &IVirtualDesktopNotificationService::IID,
-                        &mut obj,
-                    )
-                    .as_result()?;
-            }
-            assert_eq!(obj.is_null(), false);
             *notification_service = Some(Rc::new(unsafe {
-                IVirtualDesktopNotificationService::from_raw(obj)
+                IVirtualDesktopNotificationService::query_service(&provider)?
             }));
         }
         notification_service
             .as_ref()
-            .map(|v| Rc::clone(&v))
+            .map(Rc::clone)
             .ok_or(Error::ComAllocatedNullPtr)
     }
 
@@ -355,23 +356,12 @@ impl ComObjects {
             .map_err(|_| Error::InternalBorrowError)?;
         if pinned_apps.is_none() {
             let provider = self.get_provider()?;
-            let mut obj = std::ptr::null_mut::<c_void>();
-            unsafe {
-                provider
-                    .query_service(
-                        &CLSID_VirtualDesktopPinnedApps,
-                        &IVirtualDesktopPinnedApps::IID,
-                        &mut obj,
-                    )
-                    .as_result()?;
-            }
-            assert_eq!(obj.is_null(), false);
-            *pinned_apps = Some(Rc::new(unsafe { IVirtualDesktopPinnedApps::from_raw(obj) }));
+            *pinned_apps = Some(Rc::new(unsafe { IVirtualDesktopPinnedApps::query_service(&provider)? }));
         }
         pinned_apps
             .as_ref()
             .ok_or(Error::ComAllocatedNullPtr)
-            .map(|a| Rc::clone(a))
+            .map(Rc::clone)
     }
 
     fn get_view_collection(&self) -> Result<Rc<IApplicationViewCollection>> {
@@ -381,24 +371,13 @@ impl ComObjects {
             .map_err(|_| Error::InternalBorrowError)?;
         if view_collection.is_none() {
             let provider = self.get_provider()?;
-            let mut obj = std::ptr::null_mut::<c_void>();
-            unsafe {
-                provider
-                    .query_service(
-                        &IApplicationViewCollection::IID,
-                        &IApplicationViewCollection::IID,
-                        &mut obj,
-                    )
-                    .as_result()?;
-            }
-            assert_eq!(obj.is_null(), false);
             *view_collection = Some(Rc::new(unsafe {
-                IApplicationViewCollection::from_raw(obj)
+                IApplicationViewCollection::query_service(&provider)?
             }));
         }
         view_collection
             .as_ref()
-            .map(|v| Rc::clone(&v))
+            .map(Rc::clone)
             .ok_or(Error::ComAllocatedNullPtr)
     }
 
@@ -466,7 +445,7 @@ impl ComObjects {
         let desktops = self.get_idesktops_array()?;
         let count = unsafe { desktops.GetCount()? };
         for i in 0..count {
-            let desktop_id: GUID = get_idesktop_guid(&unsafe { desktops.GetAt(i)? })?;
+            let desktop_id: GUID = get_idesktop_guid(&unsafe { IObjectArrayGetAt(&desktops, i)? })?;
             if desktop_id == *id {
                 return Ok(i);
             }
@@ -480,7 +459,7 @@ impl ComObjects {
         if id >= count {
             return Err(Error::DesktopNotFound);
         }
-        get_idesktop_guid(&unsafe { desktops.GetAt(id)? })
+        get_idesktop_guid(&unsafe { IObjectArrayGetAt(&desktops, id)? })
     }
 
     fn get_idesktop(&self, desktop: &DesktopInternal) -> Result<IVirtualDesktop> {
@@ -491,7 +470,7 @@ impl ComObjects {
                 if *id >= count {
                     return Err(Error::DesktopNotFound);
                 }
-                Ok(unsafe { desktops.GetAt(*id)? })
+                Ok(unsafe { IObjectArrayGetAt(&desktops, *id)? })
             }
             DesktopInternal::Guid(id) => {
                 let manager = self.get_manager_internal()?;
@@ -537,7 +516,7 @@ impl ComObjects {
         let mut view = None;
         unsafe {
             self.get_view_collection()?
-                .get_view_for_hwnd(hwnd.clone(), &mut view)
+                .get_view_for_hwnd(*hwnd, &mut view)
                 .as_result()
                 .map_err(|er| {
                     if er == Error::ComElementNotFound {
@@ -574,7 +553,7 @@ impl ComObjects {
         let count = unsafe { desktops.GetCount()? };
         let mut result = Vec::with_capacity(count as usize);
         for i in 0..count {
-            let desktop = unsafe { desktops.GetAt(i)? };
+            let desktop = unsafe { IObjectArrayGetAt(&desktops, i)? };
             let id = get_idesktop_guid(&desktop)?;
             result.push(DesktopInternal::IndexGuid(i, id));
         }
@@ -648,7 +627,7 @@ impl ComObjects {
     #[apply(retry_function)]
     pub fn is_window_on_desktop(&self, window: &HWND, desktop: &DesktopInternal) -> Result<bool> {
         let desktop_win = self.get_desktop_by_window(window)?;
-        Ok(self.get_desktop_id(&desktop_win)? == self.get_desktop_id(&*desktop)?)
+        Ok(self.get_desktop_id(&desktop_win)? == self.get_desktop_id(desktop)?)
     }
 
     #[apply(retry_function)]
@@ -656,7 +635,7 @@ impl ComObjects {
         unsafe {
             let mut value = false;
             self.get_manager()?
-                .is_window_on_current_desktop(window.clone(), &mut value)
+                .is_window_on_current_desktop(*window, &mut value)
                 .as_result()
                 .map_err(|er| match er {
                     // Window does not exist
@@ -688,7 +667,7 @@ impl ComObjects {
         let mut desktop = GUID::default();
         unsafe {
             self.get_manager()?
-                .get_desktop_by_window(window.clone(), &mut desktop)
+                .get_desktop_by_window(*window, &mut desktop)
                 .as_result()
                 .map_err(|er| match er {
                     // Window does not exist
@@ -794,7 +773,7 @@ impl ComObjects {
 
     #[apply(retry_function)]
     pub fn get_desktop_name(&self, desktop: &DesktopInternal) -> Result<String> {
-        let desktop = self.get_idesktop(&desktop)?;
+        let desktop = self.get_idesktop(desktop)?;
         let mut name = HSTRING::default();
         unsafe {
             desktop.get_name(&mut name).as_result()?;
@@ -804,7 +783,7 @@ impl ComObjects {
 
     #[apply(retry_function)]
     pub fn set_desktop_name(&self, desktop: &DesktopInternal, name: &str) -> Result<()> {
-        let desktop = self.get_idesktop(&desktop)?;
+        let desktop = self.get_idesktop(desktop)?;
         let manager_internal = self.get_manager_internal()?;
 
         unsafe {
@@ -816,7 +795,7 @@ impl ComObjects {
 
     #[apply(retry_function)]
     pub fn get_desktop_wallpaper(&self, desktop: &DesktopInternal) -> Result<String> {
-        let desktop = self.get_idesktop(&desktop)?;
+        let desktop = self.get_idesktop(desktop)?;
         let mut path = HSTRING::default();
         unsafe {
             desktop.get_wallpaper(&mut path).as_result()?;
@@ -863,5 +842,5 @@ where
     // });
 
     // return COM_OBJECTS.with(|c| run_function_and_retry(&f, &c));
-    return COM_OBJECTS.with(|c| f(&c));
+    COM_OBJECTS.with(|c| f(c))
 }

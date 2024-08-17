@@ -1,40 +1,42 @@
-/// Interface definitions for the Virtual Desktop API
-///
-/// Most of the functions are not tested or used, beware if you try to use these
-/// for something else. Notably I know that most out parameters defined as `*mut
-/// IMyObject` are incorrect, they probably should be *mut Option<IMyObject>.
-///
-/// Generally these are the rules:
-/// 1. InOpt = `Option<ComIn<IMyObject>>` or `Option<ManuallyDrop<IMyObject>>`
-/// 2. In = `ComIn<IMyObject>` or `ManuallyDrop<IMyObject>`
-/// 3. Out = `*mut Option<IMyObject>`
-/// 4. OutOpt = `*mut Option<IMyObject>`
-///
-/// Last two are same intentionally.
-///
-/// ## The summary of COM object lifetime rules:
-///
-/// > 1. When a COM object is passed from caller to callee as an input parameter
-/// >    to a method, the caller is expected to keep a reference on the object
-/// >    for the duration of the method call. The callee shouldn't need to call
-/// >    `AddRef` or `Release` for the synchronous duration of that method call.
-/// >
-/// > 2. When a COM object is passed from callee to caller as an out parameter
-/// >    from a method the object is provided to the caller with a reference
-/// >    already taken and the caller owns the reference. Which is to say, it is
-/// >    the caller's responsibility to call `Release` when they're done with
-/// >    the object.
-/// >
-/// > 3. When making a copy of a COM object pointer you need to call `AddRef`
-/// >    and `Release`. The `AddRef` must be called before you call `Release` on
-/// >    the original COM object pointer.
-///
-/// Rules as [written by David
-/// Risney](https://github.com/MicrosoftEdge/WebView2Feedback/issues/2133).
-///
-/// If you read the rules carefully, ComIn is most common usecase in Rust
-/// API definitions as most parameters are `In` parameters.
-#[allow(non_upper_case_globals)]
+//! Interface definitions for the Virtual Desktop API
+//!
+//! Most of the functions are not tested or used, beware if you try to use these
+//! for something else. Notably I know that most out parameters defined as `*mut
+//! IMyObject` are incorrect, they probably should be *mut Option<IMyObject>.
+//!
+//! Generally these are the rules:
+//! 1. InOpt = `Option<ComIn<IMyObject>>` or `Option<ManuallyDrop<IMyObject>>`
+//! 2. In = `ComIn<IMyObject>` or `ManuallyDrop<IMyObject>`
+//! 3. Out = `*mut Option<IMyObject>`
+//! 4. OutOpt = `*mut Option<IMyObject>`
+//!
+//! Last two are same intentionally.
+//!
+//! ## The summary of COM object lifetime rules:
+//!
+//! > 1. When a COM object is passed from caller to callee as an input parameter
+//! >    to a method, the caller is expected to keep a reference on the object
+//! >    for the duration of the method call. The callee shouldn't need to call
+//! >    `AddRef` or `Release` for the synchronous duration of that method call.
+//! >
+//! > 2. When a COM object is passed from callee to caller as an out parameter
+//! >    from a method the object is provided to the caller with a reference
+//! >    already taken and the caller owns the reference. Which is to say, it is
+//! >    the caller's responsibility to call `Release` when they're done with
+//! >    the object.
+//! >
+//! > 3. When making a copy of a COM object pointer you need to call `AddRef`
+//! >    and `Release`. The `AddRef` must be called before you call `Release` on
+//! >    the original COM object pointer.
+//!
+//! Rules as [written by David
+//! Risney](https://github.com/MicrosoftEdge/WebView2Feedback/issues/2133).
+//!
+//! If you read the rules carefully, ComIn is most common usecase in Rust
+//! API definitions as most parameters are `In` parameters.
+#![allow(non_upper_case_globals)]
+
+use crate::comobjects::HRESULTHelpers;
 use std::ffi::c_void;
 use std::ops::Deref;
 use windows::{
@@ -55,7 +57,7 @@ use windows::{
 ///
 /// E.g.
 ///
-/// ```rust
+/// ```rust,ignore
 /// fn get_current_desktop(&mut self, desktop: &mut Option<IVirtualDesktop>) -> HRESULT;
 /// fn switch_desktop(&self, desktop: ManuallyDrop<IVirtualDesktop>) -> HRESULT;
 ///
@@ -70,7 +72,7 @@ use windows::{
 ///
 /// To make things safer and easier to use, ComIn is used instead.
 ///
-/// ```rust
+/// ```rust,ignore
 /// fn get_current_desktop(&mut self, desktop: &mut Option<IVirtualDesktop>) -> HRESULT;
 /// fn switch_desktop(&self, desktop: ComIn<IVirtualDesktop>) -> HRESULT;
 ///
@@ -369,6 +371,22 @@ pub unsafe trait IApplicationViewCollection: IUnknown {
 
     pub unsafe fn unregister_for_application_view_changes(&self, id: DWORD) -> HRESULT;
 }
+impl IApplicationViewCollection {
+    pub unsafe fn query_service(provider: &IServiceProvider) -> crate::Result<Self> {
+        let mut obj = std::ptr::null_mut::<c_void>();
+        unsafe {
+            provider
+                .query_service(
+                    &IApplicationViewCollection::IID,
+                    &IApplicationViewCollection::IID,
+                    &mut obj,
+                )
+                .as_result()?;
+        }
+        assert_eq!(obj.is_null(), false);
+        unsafe { Ok(IApplicationViewCollection::from_raw(obj)) }
+    }
+}
 
 #[windows_interface::interface("B9E5E94D-233E-49AB-AF5C-2B4541C3AADE")]
 pub unsafe trait IVirtualDesktopNotification: IUnknown {
@@ -437,6 +455,22 @@ pub unsafe trait IVirtualDesktopNotificationService: IUnknown {
 
     pub unsafe fn unregister(&self, cookie: u32) -> HRESULT;
 }
+impl IVirtualDesktopNotificationService {
+    pub unsafe fn query_service(provider: &IServiceProvider) -> crate::Result<Self> {
+        let mut obj = std::ptr::null_mut::<c_void>();
+        unsafe {
+            provider
+                .query_service(
+                    &CLSID_IVirtualNotificationService,
+                    &IVirtualDesktopNotificationService::IID,
+                    &mut obj,
+                )
+                .as_result()?;
+        }
+        assert_eq!(obj.is_null(), false);
+        unsafe { Ok(IVirtualDesktopNotificationService::from_raw(obj)) }
+    }
+}
 
 #[windows_interface::interface("53F5CA0B-158F-4124-900C-057158060B27")]
 pub unsafe trait IVirtualDesktopManagerInternal: IUnknown {
@@ -499,6 +533,22 @@ pub unsafe trait IVirtualDesktopManagerInternal: IUnknown {
     pub unsafe fn set_wallpaper(&self, desktop: ComIn<IVirtualDesktop>, name: HSTRING) -> HRESULT;
     pub unsafe fn update_wallpaper_for_all(&self, name: HSTRING) -> HRESULT;
 }
+impl IVirtualDesktopManagerInternal {
+    pub unsafe fn query_service(provider: &IServiceProvider) -> crate::Result<Self> {
+        let mut obj = std::ptr::null_mut::<c_void>();
+        unsafe {
+            provider
+                .query_service(
+                    &CLSID_VirtualDesktopManagerInternal,
+                    &IVirtualDesktopManagerInternal::IID,
+                    &mut obj,
+                )
+                .as_result()?;
+        }
+        assert_eq!(obj.is_null(), false);
+        unsafe { Ok(IVirtualDesktopManagerInternal::from_raw(obj)) }
+    }
+}
 
 #[windows_interface::interface("4CE81583-1E4C-4632-A621-07A53543148F")]
 pub unsafe trait IVirtualDesktopPinnedApps: IUnknown {
@@ -513,4 +563,30 @@ pub unsafe trait IVirtualDesktopPinnedApps: IUnknown {
     ) -> HRESULT;
     pub unsafe fn pin_view(&self, view: ComIn<IApplicationView>) -> HRESULT;
     pub unsafe fn unpin_view(&self, view: ComIn<IApplicationView>) -> HRESULT;
+}
+impl IVirtualDesktopPinnedApps {
+    pub unsafe fn query_service(provider: &IServiceProvider) -> crate::Result<Self> {
+        let mut obj = std::ptr::null_mut::<c_void>();
+        unsafe {
+            provider
+                .query_service(
+                    &CLSID_VirtualDesktopPinnedApps,
+                    &IVirtualDesktopPinnedApps::IID,
+                    &mut obj,
+                )
+                .as_result()?;
+        }
+        assert_eq!(obj.is_null(), false);
+        unsafe { Ok(IVirtualDesktopPinnedApps::from_raw(obj)) }
+    }
+}
+
+/// Re-export of [`IObjectArray::GetAt`] to match API of the
+/// [`crate::interfaces_multi`] module.
+#[allow(non_snake_case)]
+pub unsafe fn IObjectArrayGetAt<T: Interface>(
+    array: &IObjectArray,
+    index: UINT,
+) -> windows::core::Result<T> {
+    array.GetAt(index)
 }

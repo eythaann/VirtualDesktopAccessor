@@ -27,6 +27,11 @@ path = "src/lib.rs"
 
 [features]
 integration-tests = []
+multiple-windows-versions = [
+    "windows/Win32_System_SystemInformation", # For RtlGetVersion return type
+    "windows/Wdk_System_SystemServices",      # For RtlGetVersion
+    "windows/Win32_System_Registry",          # For RegGetValueW
+]
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
